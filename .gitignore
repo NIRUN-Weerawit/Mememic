@@ -1,0 +1,23 @@
+# Mememic .gitignore
+
+# Virtual environment
+venv/
+__pycache__/
+*.pyc
+
+# Models (downloaded/trained)
+hand_landmarker.task
+yolov8n.pt
+models/*.pt
+models/*.onnx
+
+# Recorded data
+recorded_data/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
