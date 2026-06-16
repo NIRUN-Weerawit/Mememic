@@ -226,6 +226,24 @@ async def list_gestures():
     return JSONResponse([])
 
 
+@app.get("/memes")
+async def list_memes():
+    """Return list of all meme images with their names."""
+    memes = []
+    if os.path.exists(MEME_DIR):
+        for fname in sorted(os.listdir(MEME_DIR)):
+            if fname.lower().endswith(('.png', '.jpg', '.jpeg', '.gif')):
+                name = os.path.splitext(fname)[0]
+                ext = os.path.splitext(fname)[1][1:]
+                memes.append({
+                    "name": name,
+                    "file": fname,
+                    "url": f"/memes/{name}",
+                    "type": f"image/{ext}",
+                })
+    return JSONResponse(memes)
+
+
 # ── HTML frontend ────────────────────────────────────────────────────────
 
 INDEX_HTML = """
@@ -280,7 +298,39 @@ INDEX_HTML = """
     <p id="status">Loading...</p>
   </div>
 
+  <div class="gallery">
+    <h2>Dataset — All Memes</h2>
+    <div id="meme-grid" class="meme-grid"></div>
+  </div>
+
+  <style>
+    .gallery { max-width: 800px; margin: 30px auto; text-align: center; }
+    .gallery h2 { color: #888; font-size: 1.2em; margin-bottom: 15px; }
+    .meme-grid { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+    .meme-card {
+      width: 120px; border-radius: 8px; overflow: hidden;
+      background: #1a1a1a; border: 1px solid #333;
+      transition: transform 0.2s;
+    }
+    .meme-card:hover { transform: scale(1.05); border-color: #5af; }
+    .meme-card img { width: 100%; height: 90px; object-fit: cover; display: block; }
+    .meme-card .label {
+      padding: 4px 6px; font-size: 0.7em; color: #aaa;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+  </style>
+
   <script>
+    // Load meme gallery
+    fetch('/memes').then(r => r.json()).then(memes => {
+      const grid = document.getElementById('meme-grid');
+      memes.forEach(m => {
+        const card = document.createElement('div');
+        card.className = 'meme-card';
+        card.innerHTML = `<img src="${m.url}" alt="${m.name}" loading="lazy"/><div class="label">${m.name}</div>`;
+        grid.appendChild(card);
+      });
+    });
     const video = document.getElementById('webcam');
     const overlay = document.getElementById('meme-overlay');
     const label = document.getElementById('gesture-label');
