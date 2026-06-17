@@ -174,7 +174,11 @@ def normalize_hand(landmarks):
 def extract_face(blendshapes):
     if not blendshapes or not blendshapes[0]:
         return None
-    return [bs.score for bs in blendshapes[0]]
+    bs = [bs.score for bs in blendshapes[0]]
+    # Handle old data with 52 blend shapes (missing _neutral)
+    if len(bs) == 52:
+        bs = [0.0] + bs
+    return bs if len(bs) == 53 else None
 
 
 def classify_frame(rgb_image):
@@ -515,6 +519,12 @@ INDEX_HTML = """
 
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Mememic Server")
+    parser.add_argument("--port", type=int, default=8001, help="Port to run the server on (default: 8001)")
+    args = parser.parse_args()
+    port = args.port
+
     print("=" * 60)
     print("  Mememic Server — Hand + Face")
     print("=" * 60)
@@ -525,11 +535,11 @@ if __name__ == "__main__":
         sys.exit(1)
 
     print()
-    print("  Server starting...")
-    print("  Open http://localhost:8001 in a browser")
-    print("  Other devices on your network: http://<YOUR_IP>:8001")
+    print(f"  Server starting...")
+    print(f"  Open http://localhost:{port} in a browser")
+    print(f"  Other devices on your network: http://<YOUR_IP>:{port}")
     print()
     print("  Press Ctrl+C to stop")
     print()
 
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+    uvicorn.run(app, host="0.0.0.0", port=port)

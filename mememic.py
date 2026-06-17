@@ -95,7 +95,11 @@ def normalize_hand(landmarks):
 def extract_face(blendshapes):
     if not blendshapes or not blendshapes[0]:
         return None
-    return [bs.score for bs in blendshapes[0]]
+    bs = [bs.score for bs in blendshapes[0]]
+    # Handle old data with 52 blend shapes (missing _neutral)
+    if len(bs) == 52:
+        bs = [0.0] + bs
+    return bs if len(bs) == 53 else None
 
 
 # ── Model loading ─────────────────────────────────────────────────────────
@@ -271,33 +275,32 @@ def classify_gesture(landmarks):
 
 
 # ── Thread-safe state ──────────────────────────────────────────────────
-current_hand = None
+current_hands = None  # list of hands, each is list of 21 (x,y,z) tuples
 current_face = None
 state_lock = threading.Lock()
 
 
-def update_state(hand_lm, face_bs):
-    global current_hand, current_face
+def update_state(hands, face_bs):
+    global current_hands, current_face
     with state_lock:
-        current_hand = hand_lm
+        current_hands = hands
         current_face = face_bs
 
 
 def get_state():
-    global current_hand, current_face
+    global current_hands, current_face
     with state_lock:
-        return current_hand, current_face
+        return current_hands, current_face
 
 
 def hand_callback(result, output_image, timestamp_ms):
-    lm_list = []
+    hands = []
     if result.hand_landmarks:
         for hand in result.hand_landmarks:
             pts = [(lm.x, lm.y, lm.z) for lm in hand]
-            lm_list.append(pts)
-    h = lm_list[0] if lm_list else None
+            hands.append(pts)
     _, f = get_state()
-    update_state(h, f)
+    update_state(hands if hands else None, f)
 
 
 def face_callback(result, output_image, timestamp_ms):
@@ -384,14 +387,17 @@ def main():
         hand_landmarker.detect_async(mp_image, frame_count)
         face_landmarker.detect_async(mp_image, frame_count)
 
-        hand_lm, face_bs = get_state()
+        hands, face_bs = get_state()
         gesture = "FIST"
         conf = 0.0
         mode_label = "RULE"
 
-        if hand_lm is not None:
-            # Feed hand into motion buffer
-            norm = normalize_hand(hand_lm[0])
+        if hands is not None and len(hands) > 0:
+            # Use the first detected hand for inference
+            primary_hand = hands[0]
+
+            # Feed primary hand into motion buffer
+            norm = normalize_hand(primary_hand)
             MOTION_BUFFER.append(norm)
 
             # Try motion GRU first
@@ -404,14 +410,14 @@ def main():
 
             # Try combined (hand + face)
             if conf < 0.5 and COMBINED_MODEL and face_bs is not None:
-                g, c = classify_combined(hand_lm[0], extract_face(face_bs))
+                g, c = classify_combined(primary_hand, extract_face(face_bs))
                 if g is not None and c > conf:
                     gesture, conf = g, c
                     mode_label = "COMBINED"
 
             # Try hand MLP
             if conf < 0.5 and HAND_MODEL:
-                g, c = classify_hand(hand_lm[0])
+                g, c = classify_hand(primary_hand)
                 if g is not None and c > conf:
                     gesture, conf = g, c
                     mode_label = "HAND"
@@ -425,15 +431,15 @@ def main():
 
             # Fallback to rule
             if conf < 0.5:
-                gesture = classify_gesture(hand_lm[0])
+                gesture = classify_gesture(primary_hand)
                 mode_label = "RULE"
 
             if motion_cooldown > 0:
                 motion_cooldown -= 1
 
-            # Draw hand landmarks
-            for lm in hand_lm:
-                for lx, ly, _ in lm:
+            # Draw all hand landmarks
+            for hand in hands:
+                for lx, ly, _ in hand:
                     cx, cy = int(lx * w), int(ly * h)
                     cv2.circle(frame, (cx, cy), 4, (0, 255, 0), -1)
                 connections = [
@@ -442,9 +448,9 @@ def main():
                     (0,17),(17,18),(18,19),(19,20),(5,9),(9,13),(13,17),
                 ]
                 for a, b in connections:
-                    if a < len(lm) and b < len(lm):
-                        p1 = (int(lm[a][0] * w), int(lm[a][1] * h))
-                        p2 = (int(lm[b][0] * w), int(lm[b][1] * h))
+                    if a < len(hand) and b < len(hand):
+                        p1 = (int(hand[a][0] * w), int(hand[a][1] * h))
+                        p2 = (int(hand[b][0] * w), int(hand[b][1] * h))
                         cv2.line(frame, p1, p2, (0, 255, 0), 2)
 
             # Draw face expression
@@ -457,9 +463,9 @@ def main():
                     cv2.putText(frame, f"smile:{smile:.2f} brow:{brow:.2f} jaw:{jaw:.2f}",
                                 (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 200, 100), 1)
 
-            # Label
-            cx = int(hand_lm[0][0][0] * w)
-            cy = int(hand_lm[0][0][1] * h)
+            # Label at first hand's wrist
+            cx = int(primary_hand[0][0] * w)
+            cy = int(primary_hand[0][1] * h)
             label = f"{gesture} ({conf:.2f}) [{mode_label}]"
             cv2.putText(frame, label, (cx - 30, cy - 20),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)

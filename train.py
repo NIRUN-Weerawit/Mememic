@@ -47,10 +47,13 @@ def load_data():
     id_to_label = {i: name for i, name in enumerate(GESTURE_NAMES)}
 
     # Static: list of sample dicts
-    X_hand, X_face, y_static = [], [], []
+    # Static data: flat list of 63-dim samples
+    X_hand, X_face, y_static, y_face = [], [], [], []
+    # Aligned hand+face pairs for combined training
+    X_hand_aligned, X_face_aligned, y_aligned = [], [], []
     static_counts = {}
 
-    # Motion: list of sequences, each seq is list of sample dicts
+    # Motion data: list of sequences, each sequence is list of sample dicts
     X_motion_hand, X_motion_face, y_motion = [], [], []
     motion_counts = {}
 
@@ -69,7 +72,6 @@ def load_data():
                 if len(seq) >= 5:
                     hands = [s.get("hand") for s in seq]
                     faces = [s.get("face") for s in seq]
-                    # Filter out frames with no hand if we want hand-only
                     X_motion_hand.append(hands)
                     X_motion_face.append(faces)
                     y_motion.append(label)
@@ -80,23 +82,38 @@ def load_data():
                 face = s.get("face")
                 if hand is not None:
                     X_hand.append(hand)
+                    y_static.append(label)
                 if face is not None:
-                    X_face.append(face)
-                y_static.append(label)
+                    # Handle old data with 52 blend shapes (missing _neutral)
+                    if len(face) == 52:
+                        face = [0.0] + face  # prepend _neutral=0
+                    if len(face) == 53:
+                        X_face.append(face)
+                        y_face.append(label)
+                # Aligned pair for combined training
+                if hand is not None and face is not None and len(face) == 53:
+                    X_hand_aligned.append(hand)
+                    X_face_aligned.append(face)
+                    y_aligned.append(label)
             static_counts[name] = len(samples)
 
     X_hand = np.array(X_hand, dtype=np.float32) if X_hand else np.empty((0, 63), dtype=np.float32)
     X_face = np.array(X_face, dtype=np.float32) if X_face else np.empty((0, 53), dtype=np.float32)
     y_static = np.array(y_static, dtype=np.int64) if y_static else np.empty((0,), dtype=np.int64)
+    y_face = np.array(y_face, dtype=np.int64) if y_face else np.empty((0,), dtype=np.int64)
+    X_hand_aligned = np.array(X_hand_aligned, dtype=np.float32) if X_hand_aligned else np.empty((0, 63), dtype=np.float32)
+    X_face_aligned = np.array(X_face_aligned, dtype=np.float32) if X_face_aligned else np.empty((0, 53), dtype=np.float32)
+    y_aligned = np.array(y_aligned, dtype=np.int64) if y_aligned else np.empty((0,), dtype=np.int64)
 
     print(f"\n  Static hand samples: {len(X_hand)}")
     print(f"  Static face samples: {len(X_face)}")
+    print(f"  Aligned hand+face pairs: {len(X_hand_aligned)}")
     print(f"  Motion sequences: {len(X_motion_hand)}")
     for name, count in sorted(static_counts.items()):
         print(f"    {name}: {count}")
     print()
 
-    return X_hand, X_face, y_static, X_motion_hand, X_motion_face, y_motion, static_counts, motion_counts
+    return X_hand, X_face, y_static, y_face, X_hand_aligned, X_face_aligned, y_aligned, X_motion_hand, X_motion_face, y_motion, static_counts, motion_counts
 
 
 def train_mlp(X, y, name="MLP", input_dim=None):
@@ -434,7 +451,7 @@ def main():
     print("  Mememic — Gesture + Face Classifier Training")
     print("=" * 60)
 
-    X_hand, X_face, y_static, X_mh, X_mf, y_motion, sc, mc = load_data()
+    X_hand, X_face, y_static, y_face, X_hand_aligned, X_face_aligned, y_aligned, X_mh, X_mf, y_motion, sc, mc = load_data()
 
     hand_model = None
     face_model = None
@@ -447,12 +464,12 @@ def main():
         print("  ⏭️  Skipping Hand MLP (need ≥10 samples)")
 
     if len(X_face) >= 10:
-        face_model = train_mlp(X_face, y_static, name="Face MLP", input_dim=53)
+        face_model = train_mlp(X_face, y_face, name="Face MLP", input_dim=53)
     else:
         print("  ⏭️  Skipping Face MLP (need ≥10 samples)")
 
-    if len(X_hand) >= 10 and len(X_face) >= 10:
-        combined_model = train_combined(X_hand, X_face, y_static)
+    if len(X_hand_aligned) >= 10:
+        combined_model = train_combined(X_hand_aligned, X_face_aligned, y_aligned)
     else:
         print("  ⏭️  Skipping Combined (need ≥10 hand + face samples)")
 

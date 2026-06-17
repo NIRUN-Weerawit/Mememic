@@ -23,23 +23,9 @@ import json
 import threading
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MEME_DIR = os.path.join(BASE_DIR, "memes")
 DATA_DIR = os.path.join(BASE_DIR, "recorded_data")
 os.makedirs(DATA_DIR, exist_ok=True)
-
-MEME_TEMPLATES = {
-    "67_cat":           ("6..7",          (255, 50, 50)),
-    "actually":         ("umm...actually", (200, 200, 50)),
-    "bite_finger":      ("bite_finger", (100, 200, 255)),
-    "burn_to_ash":      ("burn_to_ash", (255, 150, 50)),
-    "cat_laugh":        ("cat_laugh ",   (255, 100, 200)),
-    "good":             ("good ", (50, 255, 50)),
-    "hmm":              ("hmm ",            (50, 200, 255)),
-    "monkey_confused":  ("monkey_confused",       (150, 100, 255)),
-    "no_thanks":        ("no_thanks ",   (255, 50, 50)),
-    "slap_sandal":      ("slap_sandal",          (200, 50, 200)),
-    "thinking":         ("thinking.",   (50, 200, 50)),
-    "throw_rose":       ("throw_rose",  (200, 50, 50)),
-}
 
 # 53 MediaPipe face blend shape names (in order)
 BLEND_SHAPE_NAMES = [
@@ -133,20 +119,20 @@ def get_state():
 
 
 def hand_callback(result, output_image, timestamp_ms):
+    global current_hand
     lm_list = []
     if result.hand_landmarks:
         for hand in result.hand_landmarks:
             pts = [(lm.x, lm.y, lm.z) for lm in hand]
             lm_list.append(pts)
-    h = lm_list[0] if lm_list else None
-    _, f = get_state()
-    update_state(h, f)
+    with state_lock:
+        current_hand = lm_list if lm_list else None
 
 
 def face_callback(result, output_image, timestamp_ms):
-    bs = result.face_blendshapes if result.face_blendshapes else None
-    h, _ = get_state()
-    update_state(h, bs)
+    global current_face
+    with state_lock:
+        current_face = result.face_blendshapes if result.face_blendshapes else None
 
 
 def main():
@@ -157,6 +143,19 @@ def main():
     print("  Records hand landmarks + face expression per frame.")
     print("  Static mode: SPACE records 1 frame. N to advance.")
     print("  Motion mode: M to toggle, SPACE to start/stop.")
+    print()
+
+    # Load gesture names from /memes directory
+    gesture_names = sorted([
+        os.path.splitext(f)[0]
+        for f in os.listdir(MEME_DIR)
+        if f.lower().endswith(('.png', '.jpg', '.jpeg', '.gif'))
+    ])
+    if not gesture_names:
+        print("❌ No meme images found in memes/ directory!")
+        print("   Add .png or .jpg images to the memes/ folder.")
+        sys.exit(1)
+    print(f"  Found {len(gesture_names)} memes: {', '.join(gesture_names)}")
     print()
 
     data = load_existing_data()
@@ -219,7 +218,6 @@ def main():
     cv2.namedWindow("Mememic Record", cv2.WINDOW_NORMAL)
     cv2.resizeWindow("Mememic Record", 1280, 720)
 
-    gesture_names = list(MEME_TEMPLATES.keys())
     current_idx = 0
     frame_count = 0
     recording = False
@@ -231,7 +229,6 @@ def main():
 
     while current_idx < len(gesture_names):
         name = gesture_names[current_idx]
-        text, color = MEME_TEMPLATES[name]
         existing = len(data.get(name, []))
         is_motion = meta.get(name) == "motion"
 
@@ -251,28 +248,28 @@ def main():
         hand_lm, face_bs = get_state()
 
         # Draw hand landmarks
-        if hand_lm:
-            for lm in hand_lm:
-                for lx, ly, _ in lm:
-                    cx, cy = int(lx * w), int(ly * h)
-                    cv2.circle(frame, (cx, cy), 4, (0, 255, 0), -1)
-                connections = [
-                    (0,1),(1,2),(2,3),(3,4),(0,5),(5,6),(6,7),(7,8),
-                    (0,9),(9,10),(10,11),(11,12),(0,13),(13,14),(14,15),(15,16),
-                    (0,17),(17,18),(18,19),(19,20),(5,9),(9,13),(13,17),
-                ]
-                for a, b in connections:
-                    if a < len(lm) and b < len(lm):
-                        p1 = (int(lm[a][0] * w), int(lm[a][1] * h))
-                        p2 = (int(lm[b][0] * w), int(lm[b][1] * h))
-                        cv2.line(frame, p1, p2, (0, 255, 0), 2)
+        for hand in hand_lm or []:
+            # hand_lm is a single hand: list of 21 (x,y,z) tuples
+            for lx, ly, _ in hand:
+                cx, cy = int(lx * w), int(ly * h)
+                cv2.circle(frame, (cx, cy), 4, (0, 255, 0), -1)
+            connections = [
+                (0,1),(1,2),(2,3),(3,4),(0,5),(5,6),(6,7),(7,8),
+                (0,9),(9,10),(10,11),(11,12),(0,13),(13,14),(14,15),(15,16),
+                (0,17),(17,18),(18,19),(19,20),(5,9),(9,13),(13,17),
+            ]
+            for a, b in connections:
+                if a < len(hand) and b < len(hand):
+                    p1 = (int(hand[a][0] * w), int(hand[a][1] * h))
+                    p2 = (int(hand[b][0] * w), int(hand[b][1] * h))
+                    cv2.line(frame, p1, p2, (0, 255, 0), 2)
 
         # Draw face mesh
-        if face_bs is not None:
+        if face_bs is not None and len(face_bs) > 0 and len(face_bs[0]) > 44:
             # Show expression labels
-            smile = face_bs[44].score  # mouthSmileLeft
-            brow = face_bs[1].score    # browDownLeft
-            jaw = face_bs[25].score    # jawOpen
+            smile = face_bs[0][44].score  # mouthSmileLeft
+            brow = face_bs[0][1].score    # browDownLeft
+            jaw = face_bs[0][25].score    # jawOpen
             cv2.putText(frame, f"smile:{smile:.2f} brow:{brow:.2f} jaw:{jaw:.2f}",
                         (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 200, 100), 1)
 
@@ -282,16 +279,15 @@ def main():
             record_buffer.append(sample)
 
         # ── Draw UI ──────────────────────────────────────────────────
-        preview = np.zeros((300, 400, 3), dtype=np.uint8)
-        preview[:] = (20, 20, 30)
-        cv2.rectangle(preview, (0, 0), (400, 8), color, -1)
-        lines = text.split("\n")
-        for i, line in enumerate(lines):
-            cv2.putText(preview, line, (20, 60 + i * 50),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-        cv2.putText(preview, "Mememic", (10, 280),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (80, 80, 80), 1)
-        frame[20:320, w-420:w-20] = preview
+        # Small meme thumbnail (top-right corner)
+        meme_path = os.path.join(BASE_DIR, "memes", f"{name}.jpeg")
+        if not os.path.exists(meme_path):
+            meme_path = os.path.join(BASE_DIR, "memes", f"{name}.png")
+        if os.path.exists(meme_path):
+            thumb = cv2.imread(meme_path)
+            if thumb is not None:
+                thumb = cv2.resize(thumb, (120, 90))
+                frame[20:110, w-140:w-20] = thumb
 
         bar_w = w - 40
         progress = current_idx / len(gesture_names)
@@ -315,7 +311,7 @@ def main():
 
         mode_label = "MOTION" if is_motion else "STATIC"
         cv2.putText(frame, f"Gesture: {name}  [{mode_label}]  [{existing} samples]  ({current_idx+1}/{len(gesture_names)})",
-                    (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+                    (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (100, 200, 255), 2)
 
         cv2.imshow("Mememic Record", frame)
         key = cv2.waitKey(1) & 0xFF
